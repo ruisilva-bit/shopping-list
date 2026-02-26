@@ -5,9 +5,9 @@ import { ActionResult } from "../types";
 
 type SupermarketManagerProps = {
   supermarkets: string[];
-  onAddSupermarket: (name: string) => ActionResult;
-  onEditSupermarket: (currentName: string, newName: string) => ActionResult;
-  onDeleteSupermarket: (name: string) => ActionResult;
+  onAddSupermarket: (name: string) => Promise<ActionResult>;
+  onEditSupermarket: (currentName: string, newName: string) => Promise<ActionResult>;
+  onDeleteSupermarket: (name: string) => Promise<ActionResult>;
 };
 
 export default function SupermarketManager({
@@ -21,9 +21,9 @@ export default function SupermarketManager({
   const [editValue, setEditValue] = useState("");
   const [feedback, setFeedback] = useState("");
 
-  const handleAddSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleAddSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const result = onAddSupermarket(name);
+    const result = await onAddSupermarket(name);
     setFeedback(result.message);
 
     if (result.success) {
@@ -31,8 +31,8 @@ export default function SupermarketManager({
     }
   };
 
-  const handleSaveEdit = () => {
-    const result = onEditSupermarket(editingName, editValue);
+  const handleSaveEdit = async () => {
+    const result = await onEditSupermarket(editingName, editValue);
     setFeedback(result.message);
 
     if (result.success) {
@@ -41,7 +41,7 @@ export default function SupermarketManager({
     }
   };
 
-  const handleDelete = (nameToDelete: string) => {
+  const handleDelete = async (nameToDelete: string) => {
     const confirmed = window.confirm(
       `Delete "${nameToDelete}"?\nThis also removes it from products and database templates.`
     );
@@ -50,7 +50,7 @@ export default function SupermarketManager({
       return;
     }
 
-    const result = onDeleteSupermarket(nameToDelete);
+    const result = await onDeleteSupermarket(nameToDelete);
     setFeedback(result.message);
   };
 

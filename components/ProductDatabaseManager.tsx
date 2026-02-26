@@ -6,8 +6,8 @@ import { ActionResult, ProductTemplate } from "../types";
 type ProductDatabaseManagerProps = {
   templates: ProductTemplate[];
   supermarkets: string[];
-  onEditTemplate: (id: string, name: string, supermarkets: string[]) => ActionResult;
-  onDeleteTemplate: (id: string) => ActionResult;
+  onEditTemplate: (id: string, name: string, supermarkets: string[]) => Promise<ActionResult>;
+  onDeleteTemplate: (id: string) => Promise<ActionResult>;
 };
 
 const LOGS_PREVIEW_COUNT = 3;
@@ -72,8 +72,8 @@ export default function ProductDatabaseManager({
     setFeedback("");
   };
 
-  const saveEdit = (templateId: string) => {
-    const result = onEditTemplate(templateId, editName, editSupermarkets);
+  const saveEdit = async (templateId: string) => {
+    const result = await onEditTemplate(templateId, editName, editSupermarkets);
     setFeedback(result.message);
 
     if (result.success) {
@@ -83,7 +83,7 @@ export default function ProductDatabaseManager({
     }
   };
 
-  const deleteTemplate = (templateId: string, templateName: string) => {
+  const deleteTemplate = async (templateId: string, templateName: string) => {
     const confirmed = window.confirm(
       `Delete "${templateName}" from database?\nIt will be recreated automatically when you add the item again.`
     );
@@ -92,7 +92,7 @@ export default function ProductDatabaseManager({
       return;
     }
 
-    const result = onDeleteTemplate(templateId);
+    const result = await onDeleteTemplate(templateId);
     setFeedback(result.message);
   };
 

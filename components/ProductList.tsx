@@ -6,18 +6,18 @@ import { ActionResult, Product } from "../types";
 type ProductListProps = {
   products: Product[];
   supermarkets: string[];
-  onDeleteProduct: (id: string) => void;
-  onEditProduct: (id: string, name: string, supermarkets: string[]) => ActionResult;
-  onToggleBought: (id: string, isBought: boolean) => void;
+  onDeleteProduct: (id: string) => Promise<void>;
+  onEditProduct: (id: string, name: string, supermarkets: string[]) => Promise<ActionResult>;
+  onToggleBought: (id: string, isBought: boolean) => Promise<void>;
 };
 
 type ProductCardProps = {
   product: Product;
   supermarkets: string[];
   nowMs: number;
-  onDeleteProduct: (id: string) => void;
-  onEditProduct: (id: string, name: string, supermarkets: string[]) => ActionResult;
-  onToggleBought: (id: string, isBought: boolean) => void;
+  onDeleteProduct: (id: string) => Promise<void>;
+  onEditProduct: (id: string, name: string, supermarkets: string[]) => Promise<ActionResult>;
+  onToggleBought: (id: string, isBought: boolean) => Promise<void>;
 };
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -61,8 +61,8 @@ function ProductCard({
     );
   };
 
-  const handleSaveEdit = () => {
-    const result = onEditProduct(product.id, editName, editSupermarkets);
+  const handleSaveEdit = async () => {
+    const result = await onEditProduct(product.id, editName, editSupermarkets);
     if (!result.success) {
       setError(result.message);
       return;
@@ -83,7 +83,7 @@ function ProductCard({
       return;
     }
 
-    onToggleBought(product.id, !product.isBought);
+    void onToggleBought(product.id, !product.isBought);
   };
 
   return (
@@ -124,7 +124,7 @@ function ProductCard({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              onDeleteProduct(product.id);
+              void onDeleteProduct(product.id);
             }}
             className="rounded-lg border border-red-200 px-2 py-0.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
           >

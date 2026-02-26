@@ -24,7 +24,7 @@ function getLinkClasses(isActive: boolean) {
 
 export default function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
-  const { filteredProducts, openAddModal } = useShopping();
+  const { filteredProducts, openAddModal, syncMode, syncError } = useShopping();
   const missingToBuyCount = filteredProducts.filter((product) => !product.isBought).length;
 
   return (
@@ -43,8 +43,21 @@ export default function AppShell({ children }: AppShellProps) {
               <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
                 Products {missingToBuyCount}
               </span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  syncMode === "cloud"
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-amber-100 text-amber-700"
+                }`}
+              >
+                {syncMode === "cloud" ? "Cloud sync" : "Local mode"}
+              </span>
             </div>
           </div>
+
+          {syncError ? (
+            <p className="text-xs text-amber-700">{syncError}</p>
+          ) : null}
 
           <nav className="hidden items-center justify-end gap-2 sm:flex" aria-label="Desktop navigation">
             <button

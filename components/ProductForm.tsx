@@ -6,7 +6,7 @@ import { ActionResult, ProductTemplate } from "../types";
 type ProductFormProps = {
   supermarkets: string[];
   templates: ProductTemplate[];
-  onAddProduct: (name: string, supermarkets: string[]) => ActionResult;
+  onAddProduct: (name: string, supermarkets: string[]) => Promise<ActionResult>;
   onSubmitSuccess?: () => void;
 };
 
@@ -24,6 +24,7 @@ export default function ProductForm({
   const [selectedSupermarkets, setSelectedSupermarkets] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const suggestions = useMemo(() => {
     const query = name.trim().toLowerCase();
@@ -75,9 +76,11 @@ export default function ProductForm({
     }
   };
 
-  const handleProductSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleProductSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const result = onAddProduct(name, selectedSupermarkets);
+    setIsSubmitting(true);
+    const result = await onAddProduct(name, selectedSupermarkets);
+    setIsSubmitting(false);
 
     if (!result.success) {
       setError(result.message);
@@ -167,9 +170,10 @@ export default function ProductForm({
 
       <button
         type="submit"
+        disabled={isSubmitting}
         className="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
       >
-        Add product
+        {isSubmitting ? "Adding..." : "Add product"}
       </button>
     </form>
   );
