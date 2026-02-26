@@ -5,7 +5,6 @@ A simple shopping list built with:
 - Next.js 14 (App Router)
 - TypeScript
 - Tailwind CSS
-- Local state with `localStorage` persistence
 
 ## Run locally
 
