@@ -8,12 +8,8 @@ export default function ProductsPage() {
   const {
     filteredProducts,
     supermarkets,
-    searchTerm,
     selectedSupermarket,
-    statusFilter,
-    setSearchTerm,
     setSelectedSupermarket,
-    setStatusFilter,
     deleteProduct,
     editProduct,
     toggleProductBought
@@ -22,18 +18,9 @@ export default function ProductsPage() {
   return (
     <div className="space-y-2.5">
       <FilterBar
-        searchTerm={searchTerm}
         selectedSupermarket={selectedSupermarket}
-        statusFilter={statusFilter}
         supermarkets={supermarkets}
-        onSearchChange={setSearchTerm}
         onSupermarketChange={setSelectedSupermarket}
-        onStatusChange={setStatusFilter}
-        onClearFilters={() => {
-          setSearchTerm("");
-          setSelectedSupermarket("all");
-          setStatusFilter("all");
-        }}
       />
 
       <ProductList
