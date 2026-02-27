@@ -96,26 +96,48 @@ export default function AppShell({ children }: AppShellProps) {
             <button
               type="button"
               onClick={() => setIsSidebarOpen(false)}
-              className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
             >
               Close
             </button>
           </div>
 
-          <div className="mt-4 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700">
-              Products {missingToBuyCount}
-            </span>
-            <span
-              className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                syncMode === "cloud"
-                  ? "bg-emerald-100 text-emerald-700"
-                  : "bg-amber-100 text-amber-700"
-              }`}
-            >
-              {syncMode === "cloud" ? "Cloud sync" : "Local mode"}
-            </span>
-            {syncError ? <p className="text-xs text-amber-700">{syncError}</p> : null}
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-3 shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+              Overview
+            </p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="rounded-xl border border-slate-200 bg-white p-2">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Products</p>
+                <p className="mt-0.5 text-xl font-bold leading-none text-slate-900">
+                  {missingToBuyCount}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-2">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Sync</p>
+                <p
+                  className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                    syncMode === "cloud"
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-amber-100 text-amber-700"
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      syncMode === "cloud" ? "bg-emerald-500" : "bg-amber-500"
+                    }`}
+                  />
+                  {syncMode === "cloud" ? "Cloud sync" : "Local mode"}
+                </p>
+              </div>
+            </div>
+
+            {syncError ? (
+              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+                {syncError}
+              </p>
+            ) : null}
           </div>
 
           <nav className="mt-4 space-y-2" aria-label="App navigation">
