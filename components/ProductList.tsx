@@ -217,7 +217,7 @@ function ProductCard({
           product.isBought
             ? "border-emerald-200 bg-emerald-50/50"
             : "border-slate-200 bg-white"
-        } ${isEditing ? "" : "cursor-pointer"}`}
+        } ${isEditing ? "" : "cursor-pointer select-none"}`}
       >
         {!isEditing ? (
           <>
