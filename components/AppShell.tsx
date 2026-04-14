@@ -7,6 +7,7 @@ import AddProductModal from "./AddProductModal";
 import { useShopping } from "../context/ShoppingContext";
 
 const NAV_ITEMS = [
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/", label: "Products" },
   { href: "/database", label: "Database" },
   { href: "/supermarkets", label: "Stores" }
