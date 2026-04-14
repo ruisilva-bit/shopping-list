@@ -1,17 +1,28 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useShopping } from "../../context/ShoppingContext";
 import { Product, ProductTemplate } from "../../types";
 
-const TOP_PRODUCTS_LIMIT = 7;
+const TOP_PRODUCTS_LIMIT = 10;
 const STORE_INSIGHTS_LIMIT = 6;
 const TREND_WEEKS = 10;
 const WEEK_IN_MS = 7 * 24 * 60 * 60 * 1000;
+const TREND_DETAIL_PRODUCTS_LIMIT = 8;
+const RESTOCK_LIMIT = 5;
+
+type TrendProductDetail = {
+  name: string;
+  count: number;
+};
 
 type TrendPoint = {
   label: string;
+  startMs: number;
+  endMs: number;
   count: number;
+  uniqueProducts: number;
+  topProducts: TrendProductDetail[];
 };
 
 type ProductInsight = {
@@ -20,7 +31,6 @@ type ProductInsight = {
   supermarkets: string[];
   purchaseCount: number;
   inListCount: number;
-  lastPurchaseMs: number | null;
 };
 
 type StoreInsight = {
@@ -49,19 +59,23 @@ function getWeekStartMs(value: Date) {
   return date.getTime();
 }
 
-function formatDateTime(timestampMs: number | null) {
-  if (!timestampMs) {
-    return "No purchases yet";
-  }
-
-  return new Date(timestampMs).toLocaleString();
-}
-
 function formatWeekLabel(timestampMs: number) {
   return new Date(timestampMs).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric"
   });
+}
+
+function formatWeekRange(startMs: number, endMs: number) {
+  const start = new Date(startMs).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric"
+  });
+  const end = new Date(endMs - 1).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric"
+  });
+  return `${start} - ${end}`;
 }
 
 function formatPercentage(value: number) {
@@ -76,21 +90,55 @@ function formatCompactNumber(value: number) {
 }
 
 function buildTrendSeries(templates: ProductTemplate[]) {
-  const allLogs = templates.flatMap((template) => parseValidDates(template.purchaseLog));
   const nowMs = Date.now();
   const currentWeekStart = getWeekStartMs(new Date(nowMs));
   const firstWeekStart = currentWeekStart - (TREND_WEEKS - 1) * WEEK_IN_MS;
 
-  return Array.from({ length: TREND_WEEKS }, (_, index) => {
-    const startMs = firstWeekStart + index * WEEK_IN_MS;
-    const endMs = startMs + WEEK_IN_MS;
-    const count = allLogs.filter((logMs) => logMs >= startMs && logMs < endMs).length;
+  const buckets = Array.from({ length: TREND_WEEKS }, (_, index) => ({
+    startMs: firstWeekStart + index * WEEK_IN_MS,
+    endMs: firstWeekStart + (index + 1) * WEEK_IN_MS,
+    count: 0,
+    productCounts: new Map<string, number>()
+  }));
 
-    return {
-      label: formatWeekLabel(startMs),
-      count
-    };
+  templates.forEach((template) => {
+    const productName = template.name.trim();
+    if (!productName) {
+      return;
+    }
+
+    parseValidDates(template.purchaseLog).forEach((logMs) => {
+      if (logMs < firstWeekStart || logMs >= currentWeekStart + WEEK_IN_MS) {
+        return;
+      }
+
+      const bucketIndex = Math.floor((logMs - firstWeekStart) / WEEK_IN_MS);
+      const bucket = buckets[bucketIndex];
+
+      if (!bucket) {
+        return;
+      }
+
+      bucket.count += 1;
+      bucket.productCounts.set(productName, (bucket.productCounts.get(productName) ?? 0) + 1);
+    });
   });
+
+  return buckets.map((bucket) => ({
+    label: formatWeekLabel(bucket.startMs),
+    startMs: bucket.startMs,
+    endMs: bucket.endMs,
+    count: bucket.count,
+    uniqueProducts: bucket.productCounts.size,
+    topProducts: Array.from(bucket.productCounts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => {
+        if (a.count !== b.count) {
+          return b.count - a.count;
+        }
+        return a.name.localeCompare(b.name);
+      })
+  }));
 }
 
 function buildProductInsights(templates: ProductTemplate[], products: Product[]) {
@@ -102,14 +150,12 @@ function buildProductInsights(templates: ProductTemplate[], products: Product[])
       return;
     }
 
-    const timestamps = parseValidDates(template.purchaseLog).sort((a, b) => b - a);
     map.set(key, {
       id: template.id,
       name: template.name,
       supermarkets: template.supermarkets,
-      purchaseCount: timestamps.length,
-      inListCount: 0,
-      lastPurchaseMs: timestamps[0] ?? null
+      purchaseCount: parseValidDates(template.purchaseLog).length,
+      inListCount: 0
     });
   });
 
@@ -133,8 +179,7 @@ function buildProductInsights(templates: ProductTemplate[], products: Product[])
       name: product.name,
       supermarkets: product.supermarkets,
       purchaseCount: 0,
-      inListCount: 1,
-      lastPurchaseMs: null
+      inListCount: 1
     });
   });
 
@@ -200,82 +245,58 @@ function buildStoreInsights(templates: ProductTemplate[], products: Product[]) {
 
 type TrendChartProps = {
   points: TrendPoint[];
+  selectedIndex: number;
+  onSelect: (index: number) => void;
 };
 
-function TrendChart({ points }: TrendChartProps) {
-  const width = 640;
-  const height = 240;
-  const paddingX = 20;
-  const paddingY = 20;
+function TrendChart({ points, selectedIndex, onSelect }: TrendChartProps) {
   const maxValue = Math.max(1, ...points.map((point) => point.count));
-  const innerWidth = width - paddingX * 2;
-  const innerHeight = height - paddingY * 2;
-
-  const chartPoints = points.map((point, index) => {
-    const x = paddingX + (index / Math.max(1, points.length - 1)) * innerWidth;
-    const y = paddingY + innerHeight - (point.count / maxValue) * innerHeight;
-    return { ...point, x, y };
-  });
-
-  const linePath = chartPoints
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
-    .join(" ");
-
-  const areaPath = `${linePath} L ${paddingX + innerWidth} ${paddingY + innerHeight} L ${paddingX} ${paddingY + innerHeight} Z`;
 
   return (
-    <div>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="h-44 w-full rounded-xl bg-slate-900/[0.03] p-1 sm:h-56"
-        aria-label="Weekly purchase trend chart"
-      >
-        <defs>
-          <linearGradient id="trendAreaFill" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#14b8a6" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="#14b8a6" stopOpacity="0.03" />
-          </linearGradient>
-          <linearGradient id="trendLine" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#10b981" />
-            <stop offset="100%" stopColor="#06b6d4" />
-          </linearGradient>
-        </defs>
+    <div className="rounded-xl bg-slate-900/[0.03] p-2.5">
+      <div className="flex h-44 items-end gap-1.5 sm:h-52 sm:gap-2">
+        {points.map((point, index) => {
+          const isActive = index === selectedIndex;
+          const barHeight = Math.max(16, Math.round((point.count / maxValue) * 140));
 
-        {[0.25, 0.5, 0.75].map((ratio) => (
-          <line
-            key={`grid-${ratio}`}
-            x1={paddingX}
-            x2={paddingX + innerWidth}
-            y1={paddingY + innerHeight * ratio}
-            y2={paddingY + innerHeight * ratio}
-            className="stroke-slate-300"
-            strokeWidth="1"
-            strokeDasharray="4 5"
-            opacity="0.6"
-          />
-        ))}
-
-        <path d={areaPath} fill="url(#trendAreaFill)" />
-        <path d={linePath} fill="none" stroke="url(#trendLine)" strokeWidth="3" strokeLinecap="round" />
-
-        {chartPoints.map((point, index) => (
-          <circle
-            key={`${point.label}-${index}`}
-            cx={point.x}
-            cy={point.y}
-            r="4"
-            fill="#0f172a"
-            className="drop-shadow-sm"
-          />
-        ))}
-      </svg>
-
-      <div className="mt-2 grid grid-cols-5 gap-1 text-[11px] font-medium text-slate-500 sm:grid-cols-10">
-        {points.map((point) => (
-          <span key={`label-${point.label}`} className="truncate text-center">
-            {point.label}
-          </span>
-        ))}
+          return (
+            <button
+              key={`trend-${point.startMs}`}
+              type="button"
+              onClick={() => onSelect(index)}
+              aria-pressed={isActive}
+              aria-label={`${point.label}: ${point.count} purchases`}
+              className={`group flex min-w-0 flex-1 flex-col items-center justify-end rounded-lg px-1 pb-1 pt-2 transition ${
+                isActive
+                  ? "bg-slate-900/10 ring-1 ring-slate-300"
+                  : "hover:bg-slate-900/5"
+              }`}
+            >
+              <span
+                className={`mb-1 text-[10px] font-semibold ${
+                  isActive ? "text-slate-800" : "text-slate-500 group-hover:text-slate-700"
+                }`}
+              >
+                {point.count}
+              </span>
+              <span
+                className={`block w-full rounded-md bg-gradient-to-t ${
+                  isActive
+                    ? "from-cyan-600 to-emerald-500"
+                    : "from-cyan-500/80 to-emerald-400/80"
+                }`}
+                style={{ height: `${barHeight}px` }}
+              />
+              <span
+                className={`mt-1.5 block truncate text-[10px] ${
+                  isActive ? "font-semibold text-slate-800" : "text-slate-500"
+                }`}
+              >
+                {point.label}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -333,41 +354,37 @@ function StatusDonut({ boughtCount, pendingCount }: StatusDonutProps) {
   );
 }
 
-type ProductBarsProps = {
+type TopProductsBarChartProps = {
   items: ProductInsight[];
 };
 
-function ProductBars({ items }: ProductBarsProps) {
+function TopProductsBarChart({ items }: TopProductsBarChartProps) {
   const maxValue = Math.max(1, ...items.map((item) => item.purchaseCount));
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-2">
       {items.map((item, index) => {
-        const width = `${(item.purchaseCount / maxValue) * 100}%`;
+        const widthPercent = Math.max(2, (item.purchaseCount / maxValue) * 100);
         return (
-          <article key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+          <article
+            key={`top-product-${item.id}`}
+            className="grid gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-2.5"
+          >
             <div className="flex items-center justify-between gap-2">
               <p className="truncate text-sm font-semibold text-slate-900">
                 {index + 1}. {item.name}
               </p>
               <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200">
-                {item.purchaseCount} purchases
+                {item.purchaseCount}
               </span>
             </div>
-
-            <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-3 overflow-hidden rounded-full bg-slate-200">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500"
-                style={{ width }}
+                className="h-full rounded-full bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500"
+                style={{ width: `${widthPercent}%` }}
               />
             </div>
-
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-              <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-700">
-                In list: {item.inListCount}
-              </span>
-              <span className="text-slate-500">Last: {formatDateTime(item.lastPurchaseMs)}</span>
-            </div>
+            <p className="text-[11px] text-slate-500">Current list quantity: {item.inListCount}</p>
           </article>
         );
       })}
@@ -434,6 +451,23 @@ export default function DashboardPage() {
   const productInsights = useMemo(() => buildProductInsights(templates, products), [templates, products]);
   const storeInsights = useMemo(() => buildStoreInsights(templates, products), [templates, products]);
 
+  const [selectedTrendIndex, setSelectedTrendIndex] = useState(TREND_WEEKS - 1);
+
+  useEffect(() => {
+    setSelectedTrendIndex((current) => {
+      if (trendSeries.length === 0) {
+        return 0;
+      }
+
+      if (current < 0 || current >= trendSeries.length) {
+        return trendSeries.length - 1;
+      }
+
+      return current;
+    });
+  }, [trendSeries.length]);
+
+  const selectedTrend = trendSeries[selectedTrendIndex] ?? null;
   const topProducts = productInsights.slice(0, TOP_PRODUCTS_LIMIT);
   const topStores = storeInsights.slice(0, STORE_INSIGHTS_LIMIT);
   const totalPurchases = productInsights.reduce((sum, item) => sum + item.purchaseCount, 0);
@@ -443,7 +477,7 @@ export default function DashboardPage() {
 
   const restockCandidates = productInsights
     .filter((item) => item.purchaseCount > 0 && item.inListCount === 0)
-    .slice(0, 5);
+    .slice(0, RESTOCK_LIMIT);
 
   const busiestProduct = productInsights[0];
 
@@ -493,11 +527,55 @@ export default function DashboardPage() {
             </span>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Helps identify when buying activity spikes or slows down.
+            Click a bar to inspect that week in detail.
           </p>
           <div className="mt-3">
-            <TrendChart points={trendSeries} />
+            <TrendChart
+              points={trendSeries}
+              selectedIndex={selectedTrendIndex}
+              onSelect={setSelectedTrendIndex}
+            />
           </div>
+
+          {selectedTrend ? (
+            <section className="mt-3 rounded-xl border border-teal-200 bg-teal-50/60 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-teal-700">
+                    Selected Week
+                  </p>
+                  <p className="text-sm font-semibold text-teal-900">
+                    {formatWeekRange(selectedTrend.startMs, selectedTrend.endMs)}
+                  </p>
+                </div>
+                <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-teal-800 ring-1 ring-teal-200">
+                  {selectedTrend.count} purchases
+                </span>
+              </div>
+
+              <p className="mt-2 text-xs text-teal-700">
+                {selectedTrend.uniqueProducts} unique product(s) purchased.
+              </p>
+
+              {selectedTrend.topProducts.length === 0 ? (
+                <p className="mt-2 rounded-lg bg-white px-2.5 py-2 text-xs text-slate-600 ring-1 ring-teal-100">
+                  No purchases were recorded in this week.
+                </p>
+              ) : (
+                <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                  {selectedTrend.topProducts.slice(0, TREND_DETAIL_PRODUCTS_LIMIT).map((entry) => (
+                    <div
+                      key={`${selectedTrend.startMs}-${entry.name}`}
+                      className="flex items-center justify-between rounded-lg bg-white px-2.5 py-1.5 ring-1 ring-teal-100"
+                    >
+                      <span className="truncate text-xs font-medium text-slate-700">{entry.name}</span>
+                      <span className="text-xs font-semibold text-slate-900">{entry.count}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          ) : null}
         </article>
 
         <article className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -517,13 +595,13 @@ export default function DashboardPage() {
       <section className="grid gap-3 lg:grid-cols-2">
         <article className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-base font-semibold text-slate-900">Most Common Products</h3>
+            <h3 className="text-base font-semibold text-slate-900">Top 10 Products By Quantity</h3>
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-              Top {Math.min(topProducts.length, TOP_PRODUCTS_LIMIT)}
+              Quantity purchased
             </span>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Ranked by completed purchases, with current list presence included.
+            Bar graph of products with the highest purchase quantity in history.
           </p>
           <div className="mt-3">
             {topProducts.length === 0 ? (
@@ -531,7 +609,7 @@ export default function DashboardPage() {
                 Start buying items to populate this chart.
               </p>
             ) : (
-              <ProductBars items={topProducts} />
+              <TopProductsBarChart items={topProducts} />
             )}
           </div>
         </article>
