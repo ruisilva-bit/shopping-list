@@ -10,14 +10,24 @@ import {
   useRef,
   useState
 } from "react";
-import { isSupabaseConfigured, ProductRow, supabase, TemplateRow } from "../lib/supabase";
-import { ActionResult, Product, ProductTemplate } from "../types";
+import { isSupabaseConfigured, ProductRow, SupermarketRow, supabase, TemplateRow } from "../lib/supabase";
+import {
+  ActionResult,
+  MoveDirection,
+  Product,
+  ProductTemplate,
+  PurchaseContext,
+  SectionBySupermarket
+} from "../types";
 
 const DEFAULT_SUPERMARKETS = ["Continente", "Pingo Doce", "Lidl", "Mercadona"];
 const PRODUCTS_STORAGE_KEY = "shopping-list-products";
 const SUPERMARKETS_STORAGE_KEY = "shopping-list-supermarkets";
 const TEMPLATES_STORAGE_KEY = "shopping-list-product-templates";
+const SECTIONS_STORAGE_KEY = "shopping-list-sections-by-supermarket";
 const ONE_HOUR_MS = 60 * 60 * 1000;
+
+type SectionsBySupermarket = Record<string, string[]>;
 
 export type ProductStatusFilter = "all" | "active" | "bought";
 export type SyncMode = "cloud" | "local";
@@ -25,6 +35,7 @@ export type SyncMode = "cloud" | "local";
 type ShoppingContextValue = {
   products: Product[];
   supermarkets: string[];
+  sectionsBySupermarket: SectionsBySupermarket;
   templates: ProductTemplate[];
   filteredProducts: Product[];
   searchTerm: string;
@@ -39,14 +50,40 @@ type ShoppingContextValue = {
   setStatusFilter: (value: ProductStatusFilter) => void;
   openAddModal: () => void;
   closeAddModal: () => void;
-  addProduct: (name: string, supermarkets: string[]) => Promise<ActionResult>;
-  editProduct: (id: string, name: string, supermarkets: string[]) => Promise<ActionResult>;
+  addProduct: (
+    name: string,
+    supermarkets: string[],
+    sectionBySupermarket: SectionBySupermarket
+  ) => Promise<ActionResult>;
+  editProduct: (
+    id: string,
+    name: string,
+    supermarkets: string[],
+    sectionBySupermarket: SectionBySupermarket
+  ) => Promise<ActionResult>;
   deleteProduct: (id: string) => Promise<void>;
-  toggleProductBought: (id: string, isBought: boolean) => Promise<void>;
+  toggleProductBought: (id: string, isBought: boolean, context?: PurchaseContext) => Promise<void>;
   addSupermarket: (name: string) => Promise<ActionResult>;
   editSupermarket: (currentName: string, newName: string) => Promise<ActionResult>;
   deleteSupermarket: (name: string) => Promise<ActionResult>;
-  editTemplate: (id: string, name: string, supermarkets: string[]) => Promise<ActionResult>;
+  addSectionToSupermarket: (supermarket: string, section: string) => Promise<ActionResult>;
+  renameSectionInSupermarket: (
+    supermarket: string,
+    currentSection: string,
+    newSection: string
+  ) => Promise<ActionResult>;
+  moveSectionInSupermarket: (
+    supermarket: string,
+    section: string,
+    direction: MoveDirection
+  ) => Promise<ActionResult>;
+  deleteSectionFromSupermarket: (supermarket: string, section: string) => Promise<ActionResult>;
+  editTemplate: (
+    id: string,
+    name: string,
+    supermarkets: string[],
+    sectionBySupermarket: SectionBySupermarket
+  ) => Promise<ActionResult>;
   deleteTemplate: (id: string) => Promise<ActionResult>;
 };
 
@@ -68,6 +105,20 @@ function normalizeMarkets(supermarkets: string[]) {
   return Array.from(
     new Set(
       supermarkets
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function normalizeSectionName(section: string) {
+  return section.trim();
+}
+
+function normalizeSectionList(sections: string[]) {
+  return Array.from(
+    new Set(
+      sections
         .map((item) => item.trim())
         .filter(Boolean)
     )
@@ -96,29 +147,131 @@ function pruneExpiredProducts(products: Product[]) {
   return products.filter((product) => !isExpiredBoughtProduct(product, nowMs));
 }
 
-function toProduct(row: ProductRow): Product {
+function normalizeSectionMap(
+  supermarkets: string[],
+  rawValue: unknown
+): SectionBySupermarket {
+  const normalizedMarkets = normalizeMarkets(supermarkets);
+  const source = rawValue && typeof rawValue === "object" ? (rawValue as Record<string, unknown>) : {};
+  const normalizedEntries = normalizedMarkets.map((market) => {
+    const rawSection = source[market];
+    if (typeof rawSection !== "string") {
+      return [market, null] as const;
+    }
+
+    const nextValue = normalizeSectionName(rawSection);
+    return [market, nextValue || null] as const;
+  });
+
+  return Object.fromEntries(normalizedEntries);
+}
+
+function ensureSectionsBySupermarket(
+  supermarkets: string[],
+  rawValue: unknown
+): SectionsBySupermarket {
+  const normalizedMarkets = normalizeMarkets(supermarkets);
+  const source = rawValue && typeof rawValue === "object" ? (rawValue as Record<string, unknown>) : {};
+  const entries = normalizedMarkets.map((market) => {
+    const rawSections = source[market];
+    const sections = Array.isArray(rawSections) ? rawSections.map(String) : [];
+    return [market, normalizeSectionList(sections)] as const;
+  });
+
+  return Object.fromEntries(entries);
+}
+
+function updateSectionMapValue(
+  current: SectionBySupermarket,
+  supermarket: string,
+  section: string | null
+): SectionBySupermarket {
   return {
-    id: row.id,
-    name: sanitizeName(row.name),
-    supermarkets: normalizeMarkets(row.supermarkets ?? []),
-    isBought: Boolean(row.is_bought),
-    boughtAt: row.is_bought ? row.bought_at : null
+    ...current,
+    [supermarket]: section && section.trim() ? section.trim() : null
   };
 }
 
-function toTemplate(row: TemplateRow): ProductTemplate {
+function renameSectionMapKey(
+  current: SectionBySupermarket,
+  previousName: string,
+  nextName: string
+): SectionBySupermarket {
+  const next: SectionBySupermarket = {};
+
+  Object.entries(current).forEach(([market, section]) => {
+    next[equalsIgnoreCase(market, previousName) ? nextName : market] = section;
+  });
+
+  if (!(nextName in next)) {
+    next[nextName] = null;
+  }
+
+  return next;
+}
+
+function stripSectionMapToMarkets(
+  current: SectionBySupermarket,
+  supermarkets: string[]
+): SectionBySupermarket {
+  return normalizeSectionMap(supermarkets, current);
+}
+
+function renameSectionInMap(
+  current: SectionBySupermarket,
+  supermarket: string,
+  previousSection: string,
+  nextSection: string
+): SectionBySupermarket {
+  const currentSection = current[supermarket];
+  if (!currentSection || !equalsIgnoreCase(currentSection, previousSection)) {
+    return { ...current };
+  }
+
   return {
-    id: row.id,
-    name: sanitizeName(row.name),
-    supermarkets: normalizeMarkets(row.supermarkets ?? []),
-    purchaseLog: Array.isArray(row.purchase_log) ? row.purchase_log : []
+    ...current,
+    [supermarket]: nextSection
   };
+}
+
+function clearSectionInMap(
+  current: SectionBySupermarket,
+  supermarket: string,
+  sectionToClear: string
+): SectionBySupermarket {
+  const currentSection = current[supermarket];
+  if (!currentSection || !equalsIgnoreCase(currentSection, sectionToClear)) {
+    return { ...current };
+  }
+
+  return {
+    ...current,
+    [supermarket]: null
+  };
+}
+
+function renameSupermarketKey(
+  current: SectionsBySupermarket,
+  previousName: string,
+  nextName: string
+): SectionsBySupermarket {
+  const next: SectionsBySupermarket = {};
+
+  Object.entries(current).forEach(([market, sections]) => {
+    next[equalsIgnoreCase(market, previousName) ? nextName : market] = sections;
+  });
+
+  if (!(nextName in next)) {
+    next[nextName] = [];
+  }
+
+  return next;
 }
 
 function sortProducts(products: Product[]) {
   return [...products].sort((a, b) => {
     if (a.isBought === b.isBought) {
-      return 0;
+      return a.name.localeCompare(b.name);
     }
 
     return a.isBought ? 1 : -1;
@@ -145,21 +298,80 @@ function readJson<T>(key: string, fallback: T) {
   }
 }
 
+function createEmptySectionsMap(supermarkets: string[]) {
+  return Object.fromEntries(normalizeMarkets(supermarkets).map((market) => [market, [] as string[]]));
+}
+
+function mergeSectionsForMarket(
+  current: SectionsBySupermarket,
+  supermarket: string,
+  nextSection: string
+): SectionsBySupermarket {
+  const normalizedSection = normalizeSectionName(nextSection);
+  if (!normalizedSection) {
+    return current;
+  }
+
+  const existingSections = current[supermarket] ?? [];
+  if (existingSections.some((section) => equalsIgnoreCase(section, normalizedSection))) {
+    return current;
+  }
+
+  return {
+    ...current,
+    [supermarket]: [...existingSections, normalizedSection]
+  };
+}
+
+function toProduct(row: ProductRow): Product {
+  const supermarkets = normalizeMarkets(row.supermarkets ?? []);
+
+  return {
+    id: row.id,
+    name: sanitizeName(row.name),
+    supermarkets,
+    sectionBySupermarket: normalizeSectionMap(supermarkets, row.section_by_supermarket),
+    isBought: Boolean(row.is_bought),
+    boughtAt: row.is_bought ? row.bought_at : null
+  };
+}
+
+function toTemplate(row: TemplateRow): ProductTemplate {
+  const supermarkets = normalizeMarkets(row.supermarkets ?? []);
+
+  return {
+    id: row.id,
+    name: sanitizeName(row.name),
+    supermarkets,
+    sectionBySupermarket: normalizeSectionMap(supermarkets, row.section_by_supermarket),
+    purchaseLog: Array.isArray(row.purchase_log) ? row.purchase_log : []
+  };
+}
+
+function toSectionsBySupermarket(rows: SupermarketRow[]) {
+  const entries = rows.map((row) => [row.name, normalizeSectionList(row.sections ?? [])] as const);
+  return Object.fromEntries(entries) as SectionsBySupermarket;
+}
+
 function upsertTemplateMarkets(
   templates: ProductTemplate[],
   productName: string,
-  productMarkets: string[]
+  productMarkets: string[],
+  sectionBySupermarket: SectionBySupermarket
 ) {
   const existingIndex = templates.findIndex((template) =>
     equalsIgnoreCase(template.name, productName)
   );
+  const normalizedMarkets = normalizeMarkets(productMarkets);
+  const normalizedSectionMap = normalizeSectionMap(normalizedMarkets, sectionBySupermarket);
 
   if (existingIndex === -1) {
     return [
       {
         id: createId(),
         name: productName,
-        supermarkets: productMarkets,
+        supermarkets: normalizedMarkets,
+        sectionBySupermarket: normalizedSectionMap,
         purchaseLog: []
       },
       ...templates
@@ -171,7 +383,11 @@ function upsertTemplateMarkets(
       ? {
           ...template,
           name: productName,
-          supermarkets: productMarkets
+          supermarkets: normalizedMarkets,
+          sectionBySupermarket: normalizeSectionMap(normalizedMarkets, {
+            ...template.sectionBySupermarket,
+            ...normalizedSectionMap
+          })
         }
       : template
   );
@@ -181,34 +397,44 @@ function appendTemplateLog(
   templates: ProductTemplate[],
   productName: string,
   productMarkets: string[],
+  sectionBySupermarket: SectionBySupermarket,
   boughtTimestamp: string
 ) {
   const existingIndex = templates.findIndex((template) =>
     equalsIgnoreCase(template.name, productName)
   );
+  const normalizedMarkets = normalizeMarkets(productMarkets);
+  const normalizedSectionMap = normalizeSectionMap(normalizedMarkets, sectionBySupermarket);
 
   if (existingIndex === -1) {
     return [
       {
         id: createId(),
         name: productName,
-        supermarkets: productMarkets,
+        supermarkets: normalizedMarkets,
+        sectionBySupermarket: normalizedSectionMap,
         purchaseLog: [boughtTimestamp]
       },
       ...templates
     ];
   }
 
-  return templates.map((template, index) =>
-    index === existingIndex
-      ? {
-          ...template,
-          supermarkets:
-            productMarkets.length > 0 ? productMarkets : template.supermarkets,
-          purchaseLog: [...template.purchaseLog, boughtTimestamp]
-        }
-      : template
-  );
+  return templates.map((template, index) => {
+    if (index !== existingIndex) {
+      return template;
+    }
+
+    const mergedMarkets = normalizeMarkets([...template.supermarkets, ...normalizedMarkets]);
+    return {
+      ...template,
+      supermarkets: mergedMarkets,
+      sectionBySupermarket: normalizeSectionMap(mergedMarkets, {
+        ...template.sectionBySupermarket,
+        ...normalizedSectionMap
+      }),
+      purchaseLog: [...template.purchaseLog, boughtTimestamp]
+    };
+  });
 }
 
 type ShoppingProviderProps = {
@@ -218,6 +444,9 @@ type ShoppingProviderProps = {
 export function ShoppingProvider({ children }: ShoppingProviderProps) {
   const [products, setProducts] = useState<Product[]>([]);
   const [supermarkets, setSupermarkets] = useState<string[]>(DEFAULT_SUPERMARKETS);
+  const [sectionsBySupermarket, setSectionsBySupermarket] = useState<SectionsBySupermarket>(
+    createEmptySectionsMap(DEFAULT_SUPERMARKETS)
+  );
   const [templates, setTemplates] = useState<ProductTemplate[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedSupermarket, setSelectedSupermarket] = useState("all");
@@ -240,37 +469,68 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
     const rawProducts = readJson<Product[]>(PRODUCTS_STORAGE_KEY, []);
     const rawSupermarkets = readJson<string[]>(SUPERMARKETS_STORAGE_KEY, DEFAULT_SUPERMARKETS);
     const rawTemplates = readJson<ProductTemplate[]>(TEMPLATES_STORAGE_KEY, []);
-
-    const safeProducts = pruneExpiredProducts(
-      (Array.isArray(rawProducts) ? rawProducts : []).map((product) => ({
-        id: String(product.id),
-        name: sanitizeName(String(product.name ?? "")),
-        supermarkets: normalizeMarkets(Array.isArray(product.supermarkets) ? product.supermarkets : []),
-        isBought: Boolean(product.isBought),
-        boughtAt: product.boughtAt ? String(product.boughtAt) : null
-      }))
-    ).filter((product) => product.id && product.name);
-
-    const safeSupermarkets = normalizeMarkets(
+    const normalizedSupermarkets = normalizeMarkets(
       Array.isArray(rawSupermarkets) ? rawSupermarkets : DEFAULT_SUPERMARKETS
     );
+    const rawSectionsBySupermarket = readJson<SectionsBySupermarket>(
+      SECTIONS_STORAGE_KEY,
+      createEmptySectionsMap(normalizedSupermarkets)
+    );
+
+    const safeProducts = pruneExpiredProducts(
+      (Array.isArray(rawProducts) ? rawProducts : []).map((product) => {
+        const productMarkets = normalizeMarkets(
+          Array.isArray(product.supermarkets) ? product.supermarkets : []
+        );
+
+        return {
+          id: String(product.id),
+          name: sanitizeName(String(product.name ?? "")),
+          supermarkets: productMarkets,
+          sectionBySupermarket: normalizeSectionMap(productMarkets, product.sectionBySupermarket),
+          isBought: Boolean(product.isBought),
+          boughtAt: product.boughtAt ? String(product.boughtAt) : null
+        } satisfies Product;
+      })
+    ).filter((product) => product.id && product.name);
 
     const safeTemplates = (Array.isArray(rawTemplates) ? rawTemplates : [])
-      .map((template) => ({
-        id: String(template.id),
-        name: sanitizeName(String(template.name ?? "")),
-        supermarkets: normalizeMarkets(Array.isArray(template.supermarkets) ? template.supermarkets : []),
-        purchaseLog: Array.isArray(template.purchaseLog) ? template.purchaseLog.map(String) : []
-      }))
+      .map((template) => {
+        const templateMarkets = normalizeMarkets(
+          Array.isArray(template.supermarkets) ? template.supermarkets : []
+        );
+
+        return {
+          id: String(template.id),
+          name: sanitizeName(String(template.name ?? "")),
+          supermarkets: templateMarkets,
+          sectionBySupermarket: normalizeSectionMap(templateMarkets, template.sectionBySupermarket),
+          purchaseLog: Array.isArray(template.purchaseLog) ? template.purchaseLog.map(String) : []
+        } satisfies ProductTemplate;
+      })
       .filter((template) => template.id && template.name);
 
     const mergedTemplates = safeProducts.reduce(
-      (current, product) => upsertTemplateMarkets(current, product.name, product.supermarkets),
+      (current, product) =>
+        upsertTemplateMarkets(
+          current,
+          product.name,
+          product.supermarkets,
+          product.sectionBySupermarket
+        ),
       safeTemplates
     );
 
+    const nextSupermarkets =
+      normalizedSupermarkets.length > 0 ? normalizedSupermarkets : [...DEFAULT_SUPERMARKETS];
+    const nextSectionsBySupermarket = ensureSectionsBySupermarket(
+      nextSupermarkets,
+      rawSectionsBySupermarket
+    );
+
     setProducts(sortProducts(safeProducts));
-    setSupermarkets(safeSupermarkets.length > 0 ? safeSupermarkets : [...DEFAULT_SUPERMARKETS]);
+    setSupermarkets(nextSupermarkets);
+    setSectionsBySupermarket(nextSectionsBySupermarket);
     setTemplates(mergedTemplates);
   }, []);
 
@@ -305,15 +565,14 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
         nextProducts = nextProducts.filter((product) => !expiredIds.includes(product.id));
       }
 
-      let nextSupermarkets = normalizeMarkets(
-        (supermarketsResponse.data ?? []).map((row) => String((row as { name: unknown }).name))
-      );
+      let nextSupermarketRows = (supermarketsResponse.data ?? []) as SupermarketRow[];
+      let nextSupermarkets = normalizeMarkets(nextSupermarketRows.map((row) => String(row.name)));
 
       if (nextSupermarkets.length === 0) {
         const { error } = await supabase
           .from("supermarkets")
           .upsert(
-            DEFAULT_SUPERMARKETS.map((name) => ({ name })),
+            DEFAULT_SUPERMARKETS.map((name) => ({ name, sections: [] as string[] })),
             { onConflict: "name" }
           );
 
@@ -321,8 +580,23 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
           throw error;
         }
 
-        nextSupermarkets = [...DEFAULT_SUPERMARKETS];
+        const refreshedSupermarkets = await supabase
+          .from("supermarkets")
+          .select("*")
+          .order("created_at", { ascending: true });
+
+        if (refreshedSupermarkets.error) {
+          throw refreshedSupermarkets.error;
+        }
+
+        nextSupermarketRows = (refreshedSupermarkets.data ?? []) as SupermarketRow[];
+        nextSupermarkets = normalizeMarkets(nextSupermarketRows.map((row) => String(row.name)));
       }
+
+      const nextSections = ensureSectionsBySupermarket(
+        nextSupermarkets,
+        toSectionsBySupermarket(nextSupermarketRows)
+      );
 
       let nextTemplates = (templatesResponse.data ?? []).map((row) => toTemplate(row as TemplateRow));
       const missingTemplates = nextProducts
@@ -330,6 +604,7 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
         .map((product) => ({
           name: product.name,
           supermarkets: product.supermarkets,
+          section_by_supermarket: product.sectionBySupermarket,
           purchase_log: [] as string[]
         }));
 
@@ -353,6 +628,7 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
 
       setProducts(sortProducts(nextProducts));
       setSupermarkets(nextSupermarkets);
+      setSectionsBySupermarket(nextSections);
       setTemplates(nextTemplates);
       setSyncMode("cloud");
       setSyncError("");
@@ -401,8 +677,9 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
 
     localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(products));
     localStorage.setItem(SUPERMARKETS_STORAGE_KEY, JSON.stringify(supermarkets));
+    localStorage.setItem(SECTIONS_STORAGE_KEY, JSON.stringify(sectionsBySupermarket));
     localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(templates));
-  }, [products, supermarkets, templates, isHydrated, syncMode]);
+  }, [products, supermarkets, sectionsBySupermarket, templates, isHydrated, syncMode]);
 
   useEffect(() => {
     if (!isHydrated || syncMode !== "cloud" || !supabase) {
@@ -492,17 +769,24 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
   }, [products, searchTerm, selectedSupermarket, statusFilter]);
 
   const upsertTemplateMarketsCloud = useCallback(
-    async (name: string, selectedMarkets: string[]) => {
+    async (
+      name: string,
+      selectedMarkets: string[],
+      sectionBySupermarket: SectionBySupermarket
+    ) => {
       if (!supabase) {
         return;
       }
 
+      const normalizedMarkets = normalizeMarkets(selectedMarkets);
+      const normalizedSections = normalizeSectionMap(normalizedMarkets, sectionBySupermarket);
       const existingTemplate = templates.find((template) => equalsIgnoreCase(template.name, name));
 
       if (!existingTemplate) {
         await supabase.from("templates").insert({
           name,
-          supermarkets: selectedMarkets,
+          supermarkets: normalizedMarkets,
+          section_by_supermarket: normalizedSections,
           purchase_log: []
         });
         return;
@@ -512,7 +796,11 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
         .from("templates")
         .update({
           name,
-          supermarkets: selectedMarkets
+          supermarkets: normalizedMarkets,
+          section_by_supermarket: normalizeSectionMap(normalizedMarkets, {
+            ...existingTemplate.sectionBySupermarket,
+            ...normalizedSections
+          })
         })
         .eq("id", existingTemplate.id);
     },
@@ -520,26 +808,39 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
   );
 
   const appendTemplateLogCloud = useCallback(
-    async (name: string, selectedMarkets: string[], boughtTimestamp: string) => {
+    async (
+      name: string,
+      selectedMarkets: string[],
+      sectionBySupermarket: SectionBySupermarket,
+      boughtTimestamp: string
+    ) => {
       if (!supabase) {
         return;
       }
 
+      const normalizedMarkets = normalizeMarkets(selectedMarkets);
+      const normalizedSections = normalizeSectionMap(normalizedMarkets, sectionBySupermarket);
       const existingTemplate = templates.find((template) => equalsIgnoreCase(template.name, name));
 
       if (!existingTemplate) {
         await supabase.from("templates").insert({
           name,
-          supermarkets: selectedMarkets,
+          supermarkets: normalizedMarkets,
+          section_by_supermarket: normalizedSections,
           purchase_log: [boughtTimestamp]
         });
         return;
       }
 
+      const mergedMarkets = normalizeMarkets([...existingTemplate.supermarkets, ...normalizedMarkets]);
       await supabase
         .from("templates")
         .update({
-          supermarkets: normalizeMarkets([...existingTemplate.supermarkets, ...selectedMarkets]),
+          supermarkets: mergedMarkets,
+          section_by_supermarket: normalizeSectionMap(mergedMarkets, {
+            ...existingTemplate.sectionBySupermarket,
+            ...normalizedSections
+          }),
           purchase_log: [...existingTemplate.purchaseLog, boughtTimestamp]
         })
         .eq("id", existingTemplate.id);
@@ -547,10 +848,44 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
     [templates]
   );
 
+  const syncSectionIntoStore = useCallback(
+    async (supermarket: string, sectionName: string) => {
+      const normalizedSection = normalizeSectionName(sectionName);
+      if (!normalizedSection) {
+        return;
+      }
+
+      const existingSections = sectionsBySupermarket[supermarket] ?? [];
+      if (existingSections.some((section) => equalsIgnoreCase(section, normalizedSection))) {
+        return;
+      }
+
+      if (syncMode === "local" || !supabase) {
+        setSectionsBySupermarket((current) => mergeSectionsForMarket(current, supermarket, normalizedSection));
+        return;
+      }
+
+      const { error } = await supabase
+        .from("supermarkets")
+        .update({ sections: [...existingSections, normalizedSection] })
+        .eq("name", supermarket);
+
+      if (error) {
+        throw error;
+      }
+    },
+    [sectionsBySupermarket, syncMode]
+  );
+
   const addProduct = useCallback(
-    async (name: string, selectedMarkets: string[]): Promise<ActionResult> => {
+    async (
+      name: string,
+      selectedMarkets: string[],
+      sectionBySupermarket: SectionBySupermarket
+    ): Promise<ActionResult> => {
       const normalizedName = sanitizeName(name);
       const normalizedMarkets = normalizeMarkets(selectedMarkets);
+      const normalizedSections = normalizeSectionMap(normalizedMarkets, sectionBySupermarket);
 
       if (!normalizedName) {
         return { success: false, message: "Please enter a product name." };
@@ -558,6 +893,13 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
 
       if (normalizedMarkets.length === 0) {
         return { success: false, message: "Select at least one supermarket." };
+      }
+
+      for (const market of normalizedMarkets) {
+        const sectionName = normalizedSections[market];
+        if (sectionName) {
+          await syncSectionIntoStore(market, sectionName);
+        }
       }
 
       if (syncMode === "local" || !supabase) {
@@ -567,6 +909,7 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
               id: createId(),
               name: normalizedName,
               supermarkets: normalizedMarkets,
+              sectionBySupermarket: normalizedSections,
               isBought: false,
               boughtAt: null
             },
@@ -574,7 +917,9 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
           ])
         );
 
-        setTemplates((current) => upsertTemplateMarkets(current, normalizedName, normalizedMarkets));
+        setTemplates((current) =>
+          upsertTemplateMarkets(current, normalizedName, normalizedMarkets, normalizedSections)
+        );
         return { success: true, message: `Added "${normalizedName}".` };
       }
 
@@ -582,6 +927,7 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
         id: createId(),
         name: normalizedName,
         supermarkets: normalizedMarkets,
+        section_by_supermarket: normalizedSections,
         is_bought: false,
         bought_at: null
       });
@@ -590,17 +936,23 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
         return { success: false, message: insertError.message };
       }
 
-      await upsertTemplateMarketsCloud(normalizedName, normalizedMarkets);
+      await upsertTemplateMarketsCloud(normalizedName, normalizedMarkets, normalizedSections);
       await refreshFromCloud();
       return { success: true, message: `Added "${normalizedName}".` };
     },
-    [refreshFromCloud, syncMode, upsertTemplateMarketsCloud]
+    [refreshFromCloud, syncMode, syncSectionIntoStore, upsertTemplateMarketsCloud]
   );
 
   const editProduct = useCallback(
-    async (id: string, name: string, selectedMarkets: string[]): Promise<ActionResult> => {
+    async (
+      id: string,
+      name: string,
+      selectedMarkets: string[],
+      sectionBySupermarket: SectionBySupermarket
+    ): Promise<ActionResult> => {
       const normalizedName = sanitizeName(name);
       const normalizedMarkets = normalizeMarkets(selectedMarkets);
+      const normalizedSections = normalizeSectionMap(normalizedMarkets, sectionBySupermarket);
 
       if (!normalizedName) {
         return { success: false, message: "Please enter a product name." };
@@ -610,35 +962,53 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
         return { success: false, message: "Select at least one supermarket." };
       }
 
+      for (const market of normalizedMarkets) {
+        const sectionName = normalizedSections[market];
+        if (sectionName) {
+          await syncSectionIntoStore(market, sectionName);
+        }
+      }
+
       if (syncMode === "local" || !supabase) {
         setProducts((current) =>
           sortProducts(
             current.map((product) =>
               product.id === id
-                ? { ...product, name: normalizedName, supermarkets: normalizedMarkets }
+                ? {
+                    ...product,
+                    name: normalizedName,
+                    supermarkets: normalizedMarkets,
+                    sectionBySupermarket: normalizedSections
+                  }
                 : product
             )
           )
         );
 
-        setTemplates((current) => upsertTemplateMarkets(current, normalizedName, normalizedMarkets));
+        setTemplates((current) =>
+          upsertTemplateMarkets(current, normalizedName, normalizedMarkets, normalizedSections)
+        );
         return { success: true, message: "Product updated." };
       }
 
       const { error: updateError } = await supabase
         .from("products")
-        .update({ name: normalizedName, supermarkets: normalizedMarkets })
+        .update({
+          name: normalizedName,
+          supermarkets: normalizedMarkets,
+          section_by_supermarket: normalizedSections
+        })
         .eq("id", id);
 
       if (updateError) {
         return { success: false, message: updateError.message };
       }
 
-      await upsertTemplateMarketsCloud(normalizedName, normalizedMarkets);
+      await upsertTemplateMarketsCloud(normalizedName, normalizedMarkets, normalizedSections);
       await refreshFromCloud();
       return { success: true, message: "Product updated." };
     },
-    [refreshFromCloud, syncMode, upsertTemplateMarketsCloud]
+    [refreshFromCloud, syncMode, syncSectionIntoStore, upsertTemplateMarketsCloud]
   );
 
   const deleteProduct = useCallback(
@@ -655,12 +1025,14 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
   );
 
   const toggleProductBought = useCallback(
-    async (id: string, isBought: boolean) => {
+    async (id: string, isBought: boolean, purchaseContext?: PurchaseContext) => {
       const boughtTimestamp = new Date().toISOString();
 
       if (syncMode === "local" || !supabase) {
         let boughtProductName = "";
         let boughtProductMarkets: string[] = [];
+        let boughtSectionMap: SectionBySupermarket = {};
+        let sectionToPersist: { supermarket: string; sectionName: string } | null = null;
 
         setProducts((current) =>
           sortProducts(
@@ -672,7 +1044,30 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
               if (isBought && !product.isBought) {
                 boughtProductName = product.name;
                 boughtProductMarkets = product.supermarkets;
-                return { ...product, isBought: true, boughtAt: boughtTimestamp };
+
+                const resolvedSupermarket =
+                  purchaseContext?.supermarket ??
+                  (selectedSupermarket !== "all" && product.supermarkets.includes(selectedSupermarket)
+                    ? selectedSupermarket
+                    : product.supermarkets[0] ?? null);
+                const resolvedSection = normalizeSectionName(purchaseContext?.sectionName ?? "");
+                let nextSectionMap = { ...product.sectionBySupermarket };
+
+                if (resolvedSupermarket && resolvedSection) {
+                  nextSectionMap = updateSectionMapValue(nextSectionMap, resolvedSupermarket, resolvedSection);
+                  sectionToPersist = {
+                    supermarket: resolvedSupermarket,
+                    sectionName: resolvedSection
+                  };
+                }
+
+                boughtSectionMap = stripSectionMapToMarkets(nextSectionMap, product.supermarkets);
+                return {
+                  ...product,
+                  sectionBySupermarket: boughtSectionMap,
+                  isBought: true,
+                  boughtAt: boughtTimestamp
+                };
               }
 
               if (!isBought && product.isBought) {
@@ -684,9 +1079,21 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
           )
         );
 
+        if (sectionToPersist) {
+          setSectionsBySupermarket((current) =>
+            mergeSectionsForMarket(current, sectionToPersist!.supermarket, sectionToPersist!.sectionName)
+          );
+        }
+
         if (isBought && boughtProductName) {
           setTemplates((current) =>
-            appendTemplateLog(current, boughtProductName, boughtProductMarkets, boughtTimestamp)
+            appendTemplateLog(
+              current,
+              boughtProductName,
+              boughtProductMarkets,
+              boughtSectionMap,
+              boughtTimestamp
+            )
           );
         }
 
@@ -698,21 +1105,49 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
         return;
       }
 
+      const resolvedSupermarket =
+        purchaseContext?.supermarket ??
+        (selectedSupermarket !== "all" && targetProduct.supermarkets.includes(selectedSupermarket)
+          ? selectedSupermarket
+          : targetProduct.supermarkets[0] ?? null);
+      const resolvedSection = normalizeSectionName(purchaseContext?.sectionName ?? "");
+      const nextSectionMap =
+        isBought && resolvedSupermarket && resolvedSection
+          ? updateSectionMapValue(targetProduct.sectionBySupermarket, resolvedSupermarket, resolvedSection)
+          : targetProduct.sectionBySupermarket;
+
+      if (isBought && resolvedSupermarket && resolvedSection) {
+        await syncSectionIntoStore(resolvedSupermarket, resolvedSection);
+      }
+
       await supabase
         .from("products")
         .update({
+          section_by_supermarket: stripSectionMapToMarkets(nextSectionMap, targetProduct.supermarkets),
           is_bought: isBought,
           bought_at: isBought ? boughtTimestamp : null
         })
         .eq("id", id);
 
       if (isBought && !targetProduct.isBought) {
-        await appendTemplateLogCloud(targetProduct.name, targetProduct.supermarkets, boughtTimestamp);
+        await appendTemplateLogCloud(
+          targetProduct.name,
+          targetProduct.supermarkets,
+          stripSectionMapToMarkets(nextSectionMap, targetProduct.supermarkets),
+          boughtTimestamp
+        );
       }
 
       await refreshFromCloud();
     },
-    [appendTemplateLogCloud, products, refreshFromCloud, syncMode]
+    [
+      appendTemplateLogCloud,
+      products,
+      refreshFromCloud,
+      selectedSupermarket,
+      syncMode,
+      syncSectionIntoStore
+    ]
   );
 
   const addSupermarket = useCallback(
@@ -733,10 +1168,14 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
 
       if (syncMode === "local" || !supabase) {
         setSupermarkets((current) => [...current, normalizedName]);
+        setSectionsBySupermarket((current) => ({ ...current, [normalizedName]: [] }));
         return { success: true, message: "Supermarket added successfully." };
       }
 
-      const { error } = await supabase.from("supermarkets").insert({ name: normalizedName });
+      const { error } = await supabase.from("supermarkets").insert({
+        name: normalizedName,
+        sections: []
+      });
       if (error) {
         return { success: false, message: error.message };
       }
@@ -773,6 +1212,10 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
           current.map((item) => (equalsIgnoreCase(item, existingName) ? normalizedNewName : item))
         );
 
+        setSectionsBySupermarket((current) =>
+          renameSupermarketKey(current, existingName, normalizedNewName)
+        );
+
         setProducts((current) =>
           current.map((product) => ({
             ...product,
@@ -780,6 +1223,11 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
               product.supermarkets.map((market) =>
                 equalsIgnoreCase(market, existingName) ? normalizedNewName : market
               )
+            ),
+            sectionBySupermarket: renameSectionMapKey(
+              product.sectionBySupermarket,
+              existingName,
+              normalizedNewName
             )
           }))
         );
@@ -791,6 +1239,11 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
               template.supermarkets.map((market) =>
                 equalsIgnoreCase(market, existingName) ? normalizedNewName : market
               )
+            ),
+            sectionBySupermarket: renameSectionMapKey(
+              template.sectionBySupermarket,
+              existingName,
+              normalizedNewName
             )
           }))
         );
@@ -809,34 +1262,50 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
       const impactedTemplates = templates.filter((template) =>
         template.supermarkets.some((market) => equalsIgnoreCase(market, existingName))
       );
+      const existingSections = sectionsBySupermarket[existingName] ?? [];
 
-      await client.from("supermarkets").update({ name: normalizedNewName }).eq("name", existingName);
+      await client
+        .from("supermarkets")
+        .update({ name: normalizedNewName, sections: existingSections })
+        .eq("name", existingName);
 
       await Promise.all([
-        ...impactedProducts.map((product) =>
-          client
+        ...impactedProducts.map((product) => {
+          const nextMarkets = normalizeMarkets(
+            product.supermarkets.map((market) =>
+              equalsIgnoreCase(market, existingName) ? normalizedNewName : market
+            )
+          );
+
+          return client
             .from("products")
             .update({
-              supermarkets: normalizeMarkets(
-                product.supermarkets.map((market) =>
-                  equalsIgnoreCase(market, existingName) ? normalizedNewName : market
-                )
+              supermarkets: nextMarkets,
+              section_by_supermarket: stripSectionMapToMarkets(
+                renameSectionMapKey(product.sectionBySupermarket, existingName, normalizedNewName),
+                nextMarkets
               )
             })
-            .eq("id", product.id)
-        ),
-        ...impactedTemplates.map((template) =>
-          client
+            .eq("id", product.id);
+        }),
+        ...impactedTemplates.map((template) => {
+          const nextMarkets = normalizeMarkets(
+            template.supermarkets.map((market) =>
+              equalsIgnoreCase(market, existingName) ? normalizedNewName : market
+            )
+          );
+
+          return client
             .from("templates")
             .update({
-              supermarkets: normalizeMarkets(
-                template.supermarkets.map((market) =>
-                  equalsIgnoreCase(market, existingName) ? normalizedNewName : market
-                )
+              supermarkets: nextMarkets,
+              section_by_supermarket: stripSectionMapToMarkets(
+                renameSectionMapKey(template.sectionBySupermarket, existingName, normalizedNewName),
+                nextMarkets
               )
             })
-            .eq("id", template.id)
-        )
+            .eq("id", template.id);
+        })
       ]);
 
       if (equalsIgnoreCase(selectedSupermarket, existingName)) {
@@ -846,7 +1315,15 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
       await refreshFromCloud();
       return { success: true, message: "Supermarket updated." };
     },
-    [products, refreshFromCloud, selectedSupermarket, supermarkets, syncMode, templates]
+    [
+      products,
+      refreshFromCloud,
+      sectionsBySupermarket,
+      selectedSupermarket,
+      supermarkets,
+      syncMode,
+      templates
+    ]
   );
 
   const deleteSupermarket = useCallback(
@@ -865,17 +1342,42 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
 
       if (syncMode === "local" || !supabase) {
         setSupermarkets((current) => current.filter((item) => !equalsIgnoreCase(item, existingName)));
+        setSectionsBySupermarket((current) => {
+          const next = { ...current };
+          delete next[existingName];
+          return next;
+        });
         setProducts((current) =>
-          current.map((product) => ({
-            ...product,
-            supermarkets: product.supermarkets.filter((market) => !equalsIgnoreCase(market, existingName))
-          }))
+          current.map((product) => {
+            const nextMarkets = product.supermarkets.filter(
+              (market) => !equalsIgnoreCase(market, existingName)
+            );
+
+            return {
+              ...product,
+              supermarkets: nextMarkets,
+              sectionBySupermarket: stripSectionMapToMarkets(
+                product.sectionBySupermarket,
+                nextMarkets
+              )
+            };
+          })
         );
         setTemplates((current) =>
-          current.map((template) => ({
-            ...template,
-            supermarkets: template.supermarkets.filter((market) => !equalsIgnoreCase(market, existingName))
-          }))
+          current.map((template) => {
+            const nextMarkets = template.supermarkets.filter(
+              (market) => !equalsIgnoreCase(market, existingName)
+            );
+
+            return {
+              ...template,
+              supermarkets: nextMarkets,
+              sectionBySupermarket: stripSectionMapToMarkets(
+                template.sectionBySupermarket,
+                nextMarkets
+              )
+            };
+          })
         );
 
         if (equalsIgnoreCase(selectedSupermarket, existingName)) {
@@ -894,24 +1396,40 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
       await Promise.all([
         ...products
           .filter((product) => product.supermarkets.some((market) => equalsIgnoreCase(market, existingName)))
-          .map((product) =>
-            client
+          .map((product) => {
+            const nextMarkets = product.supermarkets.filter(
+              (market) => !equalsIgnoreCase(market, existingName)
+            );
+
+            return client
               .from("products")
               .update({
-                supermarkets: product.supermarkets.filter((market) => !equalsIgnoreCase(market, existingName))
+                supermarkets: nextMarkets,
+                section_by_supermarket: stripSectionMapToMarkets(
+                  product.sectionBySupermarket,
+                  nextMarkets
+                )
               })
-              .eq("id", product.id)
-          ),
+              .eq("id", product.id);
+          }),
         ...templates
           .filter((template) => template.supermarkets.some((market) => equalsIgnoreCase(market, existingName)))
-          .map((template) =>
-            client
+          .map((template) => {
+            const nextMarkets = template.supermarkets.filter(
+              (market) => !equalsIgnoreCase(market, existingName)
+            );
+
+            return client
               .from("templates")
               .update({
-                supermarkets: template.supermarkets.filter((market) => !equalsIgnoreCase(market, existingName))
+                supermarkets: nextMarkets,
+                section_by_supermarket: stripSectionMapToMarkets(
+                  template.sectionBySupermarket,
+                  nextMarkets
+                )
               })
-              .eq("id", template.id)
-          )
+              .eq("id", template.id);
+          })
       ]);
 
       if (equalsIgnoreCase(selectedSupermarket, existingName)) {
@@ -927,10 +1445,319 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
     [products, refreshFromCloud, selectedSupermarket, supermarkets, syncMode, templates]
   );
 
+  const addSectionToSupermarket = useCallback(
+    async (supermarket: string, section: string): Promise<ActionResult> => {
+      const normalizedSupermarket = supermarkets.find((item) => equalsIgnoreCase(item, supermarket));
+      const normalizedSection = normalizeSectionName(section);
+
+      if (!normalizedSupermarket) {
+        return { success: false, message: "Supermarket not found." };
+      }
+
+      if (!normalizedSection) {
+        return { success: false, message: "Please enter a section name." };
+      }
+
+      const existingSections = sectionsBySupermarket[normalizedSupermarket] ?? [];
+      if (existingSections.some((item) => equalsIgnoreCase(item, normalizedSection))) {
+        return { success: false, message: "That section already exists." };
+      }
+
+      const nextSections = [...existingSections, normalizedSection];
+
+      if (syncMode === "local" || !supabase) {
+        setSectionsBySupermarket((current) => ({
+          ...current,
+          [normalizedSupermarket]: nextSections
+        }));
+        return { success: true, message: "Section added." };
+      }
+
+      const { error } = await supabase
+        .from("supermarkets")
+        .update({ sections: nextSections })
+        .eq("name", normalizedSupermarket);
+      if (error) {
+        return { success: false, message: error.message };
+      }
+
+      await refreshFromCloud();
+      return { success: true, message: "Section added." };
+    },
+    [refreshFromCloud, sectionsBySupermarket, supermarkets, syncMode]
+  );
+
+  const renameSectionInSupermarket = useCallback(
+    async (
+      supermarket: string,
+      currentSection: string,
+      newSection: string
+    ): Promise<ActionResult> => {
+      const normalizedSupermarket = supermarkets.find((item) => equalsIgnoreCase(item, supermarket));
+      const normalizedCurrentSection = normalizeSectionName(currentSection);
+      const normalizedNewSection = normalizeSectionName(newSection);
+
+      if (!normalizedSupermarket) {
+        return { success: false, message: "Supermarket not found." };
+      }
+
+      if (!normalizedCurrentSection) {
+        return { success: false, message: "Section not found." };
+      }
+
+      if (!normalizedNewSection) {
+        return { success: false, message: "Please enter a section name." };
+      }
+
+      const existingSections = sectionsBySupermarket[normalizedSupermarket] ?? [];
+      if (!existingSections.some((item) => equalsIgnoreCase(item, normalizedCurrentSection))) {
+        return { success: false, message: "Section not found." };
+      }
+
+      const hasConflict = existingSections.some(
+        (item) => !equalsIgnoreCase(item, normalizedCurrentSection) && equalsIgnoreCase(item, normalizedNewSection)
+      );
+      if (hasConflict) {
+        return { success: false, message: "Another section already has that name." };
+      }
+
+      const nextSections = existingSections.map((item) =>
+        equalsIgnoreCase(item, normalizedCurrentSection) ? normalizedNewSection : item
+      );
+
+      if (syncMode === "local" || !supabase) {
+        setSectionsBySupermarket((current) => ({
+          ...current,
+          [normalizedSupermarket]: nextSections
+        }));
+        setProducts((current) =>
+          current.map((product) => ({
+            ...product,
+            sectionBySupermarket: renameSectionInMap(
+              product.sectionBySupermarket,
+              normalizedSupermarket,
+              normalizedCurrentSection,
+              normalizedNewSection
+            )
+          }))
+        );
+        setTemplates((current) =>
+          current.map((template) => ({
+            ...template,
+            sectionBySupermarket: renameSectionInMap(
+              template.sectionBySupermarket,
+              normalizedSupermarket,
+              normalizedCurrentSection,
+              normalizedNewSection
+            )
+          }))
+        );
+        return { success: true, message: "Section updated." };
+      }
+
+      const client = supabase;
+      await client
+        .from("supermarkets")
+        .update({ sections: nextSections })
+        .eq("name", normalizedSupermarket);
+
+      const impactedProducts = products.filter(
+        (product) => product.sectionBySupermarket[normalizedSupermarket] &&
+          equalsIgnoreCase(product.sectionBySupermarket[normalizedSupermarket]!, normalizedCurrentSection)
+      );
+      const impactedTemplates = templates.filter(
+        (template) => template.sectionBySupermarket[normalizedSupermarket] &&
+          equalsIgnoreCase(template.sectionBySupermarket[normalizedSupermarket]!, normalizedCurrentSection)
+      );
+
+      await Promise.all([
+        ...impactedProducts.map((product) =>
+          client
+            .from("products")
+            .update({
+              section_by_supermarket: renameSectionInMap(
+                product.sectionBySupermarket,
+                normalizedSupermarket,
+                normalizedCurrentSection,
+                normalizedNewSection
+              )
+            })
+            .eq("id", product.id)
+        ),
+        ...impactedTemplates.map((template) =>
+          client
+            .from("templates")
+            .update({
+              section_by_supermarket: renameSectionInMap(
+                template.sectionBySupermarket,
+                normalizedSupermarket,
+                normalizedCurrentSection,
+                normalizedNewSection
+              )
+            })
+            .eq("id", template.id)
+        )
+      ]);
+
+      await refreshFromCloud();
+      return { success: true, message: "Section updated." };
+    },
+    [products, refreshFromCloud, sectionsBySupermarket, supermarkets, syncMode, templates]
+  );
+
+  const moveSectionInSupermarket = useCallback(
+    async (
+      supermarket: string,
+      section: string,
+      direction: MoveDirection
+    ): Promise<ActionResult> => {
+      const normalizedSupermarket = supermarkets.find((item) => equalsIgnoreCase(item, supermarket));
+      const normalizedSection = normalizeSectionName(section);
+
+      if (!normalizedSupermarket) {
+        return { success: false, message: "Supermarket not found." };
+      }
+
+      const existingSections = [...(sectionsBySupermarket[normalizedSupermarket] ?? [])];
+      const currentIndex = existingSections.findIndex((item) => equalsIgnoreCase(item, normalizedSection));
+      if (currentIndex === -1) {
+        return { success: false, message: "Section not found." };
+      }
+
+      const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+      if (nextIndex < 0 || nextIndex >= existingSections.length) {
+        return { success: false, message: "Section is already at the edge." };
+      }
+
+      const [movedSection] = existingSections.splice(currentIndex, 1);
+      existingSections.splice(nextIndex, 0, movedSection);
+
+      if (syncMode === "local" || !supabase) {
+        setSectionsBySupermarket((current) => ({
+          ...current,
+          [normalizedSupermarket]: existingSections
+        }));
+        return { success: true, message: "Section order updated." };
+      }
+
+      const { error } = await supabase
+        .from("supermarkets")
+        .update({ sections: existingSections })
+        .eq("name", normalizedSupermarket);
+      if (error) {
+        return { success: false, message: error.message };
+      }
+
+      await refreshFromCloud();
+      return { success: true, message: "Section order updated." };
+    },
+    [refreshFromCloud, sectionsBySupermarket, supermarkets, syncMode]
+  );
+
+  const deleteSectionFromSupermarket = useCallback(
+    async (supermarket: string, section: string): Promise<ActionResult> => {
+      const normalizedSupermarket = supermarkets.find((item) => equalsIgnoreCase(item, supermarket));
+      const normalizedSection = normalizeSectionName(section);
+
+      if (!normalizedSupermarket) {
+        return { success: false, message: "Supermarket not found." };
+      }
+
+      const existingSections = sectionsBySupermarket[normalizedSupermarket] ?? [];
+      if (!existingSections.some((item) => equalsIgnoreCase(item, normalizedSection))) {
+        return { success: false, message: "Section not found." };
+      }
+
+      const nextSections = existingSections.filter(
+        (item) => !equalsIgnoreCase(item, normalizedSection)
+      );
+
+      if (syncMode === "local" || !supabase) {
+        setSectionsBySupermarket((current) => ({
+          ...current,
+          [normalizedSupermarket]: nextSections
+        }));
+        setProducts((current) =>
+          current.map((product) => ({
+            ...product,
+            sectionBySupermarket: clearSectionInMap(
+              product.sectionBySupermarket,
+              normalizedSupermarket,
+              normalizedSection
+            )
+          }))
+        );
+        setTemplates((current) =>
+          current.map((template) => ({
+            ...template,
+            sectionBySupermarket: clearSectionInMap(
+              template.sectionBySupermarket,
+              normalizedSupermarket,
+              normalizedSection
+            )
+          }))
+        );
+        return { success: true, message: "Section deleted." };
+      }
+
+      const client = supabase;
+      await client
+        .from("supermarkets")
+        .update({ sections: nextSections })
+        .eq("name", normalizedSupermarket);
+
+      const impactedProducts = products.filter(
+        (product) => product.sectionBySupermarket[normalizedSupermarket] &&
+          equalsIgnoreCase(product.sectionBySupermarket[normalizedSupermarket]!, normalizedSection)
+      );
+      const impactedTemplates = templates.filter(
+        (template) => template.sectionBySupermarket[normalizedSupermarket] &&
+          equalsIgnoreCase(template.sectionBySupermarket[normalizedSupermarket]!, normalizedSection)
+      );
+
+      await Promise.all([
+        ...impactedProducts.map((product) =>
+          client
+            .from("products")
+            .update({
+              section_by_supermarket: clearSectionInMap(
+                product.sectionBySupermarket,
+                normalizedSupermarket,
+                normalizedSection
+              )
+            })
+            .eq("id", product.id)
+        ),
+        ...impactedTemplates.map((template) =>
+          client
+            .from("templates")
+            .update({
+              section_by_supermarket: clearSectionInMap(
+                template.sectionBySupermarket,
+                normalizedSupermarket,
+                normalizedSection
+              )
+            })
+            .eq("id", template.id)
+        )
+      ]);
+
+      await refreshFromCloud();
+      return { success: true, message: "Section deleted." };
+    },
+    [products, refreshFromCloud, sectionsBySupermarket, supermarkets, syncMode, templates]
+  );
+
   const editTemplate = useCallback(
-    async (id: string, name: string, selectedMarkets: string[]): Promise<ActionResult> => {
+    async (
+      id: string,
+      name: string,
+      selectedMarkets: string[],
+      sectionBySupermarket: SectionBySupermarket
+    ): Promise<ActionResult> => {
       const normalizedName = sanitizeName(name);
       const normalizedMarkets = normalizeMarkets(selectedMarkets);
+      const normalizedSections = normalizeSectionMap(normalizedMarkets, sectionBySupermarket);
 
       if (!normalizedName) {
         return { success: false, message: "Please enter a product name." };
@@ -947,11 +1774,23 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
         return { success: false, message: "Another database item already has that name." };
       }
 
+      for (const market of normalizedMarkets) {
+        const sectionName = normalizedSections[market];
+        if (sectionName) {
+          await syncSectionIntoStore(market, sectionName);
+        }
+      }
+
       if (syncMode === "local" || !supabase) {
         setTemplates((current) =>
           current.map((template) =>
             template.id === id
-              ? { ...template, name: normalizedName, supermarkets: normalizedMarkets }
+              ? {
+                  ...template,
+                  name: normalizedName,
+                  supermarkets: normalizedMarkets,
+                  sectionBySupermarket: normalizedSections
+                }
               : template
           )
         );
@@ -960,7 +1799,11 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
 
       const { error } = await supabase
         .from("templates")
-        .update({ name: normalizedName, supermarkets: normalizedMarkets })
+        .update({
+          name: normalizedName,
+          supermarkets: normalizedMarkets,
+          section_by_supermarket: normalizedSections
+        })
         .eq("id", id);
 
       if (error) {
@@ -970,7 +1813,7 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
       await refreshFromCloud();
       return { success: true, message: "Database item updated." };
     },
-    [refreshFromCloud, syncMode, templates]
+    [refreshFromCloud, syncMode, syncSectionIntoStore, templates]
   );
 
   const deleteTemplate = useCallback(
@@ -1003,6 +1846,7 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
     () => ({
       products,
       supermarkets,
+      sectionsBySupermarket,
       templates,
       filteredProducts,
       searchTerm,
@@ -1024,12 +1868,17 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
       addSupermarket,
       editSupermarket,
       deleteSupermarket,
+      addSectionToSupermarket,
+      renameSectionInSupermarket,
+      moveSectionInSupermarket,
+      deleteSectionFromSupermarket,
       editTemplate,
       deleteTemplate
     }),
     [
       products,
       supermarkets,
+      sectionsBySupermarket,
       templates,
       filteredProducts,
       searchTerm,
@@ -1048,6 +1897,10 @@ export function ShoppingProvider({ children }: ShoppingProviderProps) {
       addSupermarket,
       editSupermarket,
       deleteSupermarket,
+      addSectionToSupermarket,
+      renameSectionInSupermarket,
+      moveSectionInSupermarket,
+      deleteSectionFromSupermarket,
       editTemplate,
       deleteTemplate
     ]

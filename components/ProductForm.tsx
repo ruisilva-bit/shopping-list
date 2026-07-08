@@ -1,12 +1,17 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import { ActionResult, ProductTemplate } from "../types";
+import { ActionResult, ProductTemplate, SectionBySupermarket } from "../types";
 
 type ProductFormProps = {
   supermarkets: string[];
+  sectionsBySupermarket: Record<string, string[]>;
   templates: ProductTemplate[];
-  onAddProduct: (name: string, supermarkets: string[]) => Promise<ActionResult>;
+  onAddProduct: (
+    name: string,
+    supermarkets: string[],
+    sectionBySupermarket: SectionBySupermarket
+  ) => Promise<ActionResult>;
   onSubmitSuccess?: () => void;
 };
 
@@ -14,14 +19,25 @@ function equalsIgnoreCase(a: string, b: string) {
   return a.toLowerCase() === b.toLowerCase();
 }
 
+function normalizeSectionMap(
+  supermarkets: string[],
+  sectionBySupermarket: SectionBySupermarket
+): SectionBySupermarket {
+  return Object.fromEntries(
+    supermarkets.map((market) => [market, sectionBySupermarket[market] ?? null])
+  );
+}
+
 export default function ProductForm({
   supermarkets,
+  sectionsBySupermarket,
   templates,
   onAddProduct,
   onSubmitSuccess
 }: ProductFormProps) {
   const [name, setName] = useState("");
   const [selectedSupermarkets, setSelectedSupermarkets] = useState<string[]>([]);
+  const [selectedSections, setSelectedSections] = useState<SectionBySupermarket>({});
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -39,18 +55,32 @@ export default function ProductForm({
   }, [name, templates]);
 
   const toggleSupermarket = (supermarket: string) => {
-    setSelectedSupermarkets((current) =>
-      current.includes(supermarket)
-        ? current.filter((item) => item !== supermarket)
-        : [...current, supermarket]
-    );
+    setSelectedSupermarkets((current) => {
+      if (current.includes(supermarket)) {
+        setSelectedSections((existing) => {
+          const next = { ...existing };
+          delete next[supermarket];
+          return next;
+        });
+        return current.filter((item) => item !== supermarket);
+      }
+
+      return [...current, supermarket];
+    });
+  };
+
+  const updateSection = (supermarket: string, section: string) => {
+    setSelectedSections((current) => ({
+      ...current,
+      [supermarket]: section.trim() ? section : null
+    }));
   };
 
   const applyTemplate = (template: ProductTemplate) => {
+    const nextMarkets = template.supermarkets.filter((market) => supermarkets.includes(market));
     setName(template.name);
-    setSelectedSupermarkets(
-      template.supermarkets.filter((market) => supermarkets.includes(market))
-    );
+    setSelectedSupermarkets(nextMarkets);
+    setSelectedSections(normalizeSectionMap(nextMarkets, template.sectionBySupermarket));
     setFeedback(`Loaded template "${template.name}".`);
     setError("");
   };
@@ -69,9 +99,9 @@ export default function ProductForm({
     );
 
     if (exactTemplate) {
-      setSelectedSupermarkets(
-        exactTemplate.supermarkets.filter((market) => supermarkets.includes(market))
-      );
+      const nextMarkets = exactTemplate.supermarkets.filter((market) => supermarkets.includes(market));
+      setSelectedSupermarkets(nextMarkets);
+      setSelectedSections(normalizeSectionMap(nextMarkets, exactTemplate.sectionBySupermarket));
       setFeedback(`Loaded template "${exactTemplate.name}".`);
     }
   };
@@ -79,7 +109,11 @@ export default function ProductForm({
   const handleProductSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsSubmitting(true);
-    const result = await onAddProduct(name, selectedSupermarkets);
+    const result = await onAddProduct(
+      name,
+      selectedSupermarkets,
+      normalizeSectionMap(selectedSupermarkets, selectedSections)
+    );
     setIsSubmitting(false);
 
     if (!result.success) {
@@ -89,6 +123,7 @@ export default function ProductForm({
 
     setName("");
     setSelectedSupermarkets([]);
+    setSelectedSections({});
     setError("");
     setFeedback(result.message);
     onSubmitSuccess?.();
@@ -164,6 +199,41 @@ export default function ProductForm({
           ))}
         </div>
       </fieldset>
+
+      {selectedSupermarkets.length > 0 ? (
+        <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium text-slate-700">Sections by market</p>
+            <span className="text-xs text-slate-500">Optional now, learn later when buying</span>
+          </div>
+
+          <div className="space-y-2">
+            {selectedSupermarkets.map((supermarket) => {
+              const sections = sectionsBySupermarket[supermarket] ?? [];
+
+              return (
+                <div key={`${supermarket}-section`} className="space-y-1">
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {supermarket}
+                  </label>
+                  <select
+                    value={selectedSections[supermarket] ?? ""}
+                    onChange={(event) => updateSection(supermarket, event.target.value)}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  >
+                    <option value="">No section yet</option>
+                    {sections.map((section) => (
+                      <option key={`${supermarket}-${section}`} value={section}>
+                        {section}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       {!error && feedback ? <p className="text-sm text-emerald-700">{feedback}</p> : null}

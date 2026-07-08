@@ -6,7 +6,12 @@ import { ActionResult, ProductTemplate } from "../types";
 type ProductDatabaseManagerProps = {
   templates: ProductTemplate[];
   supermarkets: string[];
-  onEditTemplate: (id: string, name: string, supermarkets: string[]) => Promise<ActionResult>;
+  onEditTemplate: (
+    id: string,
+    name: string,
+    supermarkets: string[],
+    sectionBySupermarket: ProductTemplate["sectionBySupermarket"]
+  ) => Promise<ActionResult>;
   onDeleteTemplate: (id: string) => Promise<ActionResult>;
 };
 
@@ -73,7 +78,13 @@ export default function ProductDatabaseManager({
   };
 
   const saveEdit = async (templateId: string) => {
-    const result = await onEditTemplate(templateId, editName, editSupermarkets);
+    const existingTemplate = templates.find((template) => template.id === templateId);
+    const result = await onEditTemplate(
+      templateId,
+      editName,
+      editSupermarkets,
+      existingTemplate?.sectionBySupermarket ?? {}
+    );
     setFeedback(result.message);
 
     if (result.success) {

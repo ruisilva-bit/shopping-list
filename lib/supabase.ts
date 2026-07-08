@@ -20,6 +20,7 @@ export type ProductRow = {
   id: string;
   name: string;
   supermarkets: string[] | null;
+  section_by_supermarket: Record<string, string | null> | null;
   is_bought: boolean;
   bought_at: string | null;
   created_at: string;
@@ -28,6 +29,7 @@ export type ProductRow = {
 export type SupermarketRow = {
   id: string;
   name: string;
+  sections: string[] | null;
   created_at: string;
 };
 
@@ -35,6 +37,7 @@ export type TemplateRow = {
   id: string;
   name: string;
   supermarkets: string[] | null;
+  section_by_supermarket: Record<string, string | null> | null;
   purchase_log: string[] | null;
   created_at: string;
 };

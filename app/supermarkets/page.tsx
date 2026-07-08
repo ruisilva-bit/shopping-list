@@ -4,7 +4,17 @@ import SupermarketManager from "../../components/SupermarketManager";
 import { useShopping } from "../../context/ShoppingContext";
 
 export default function SupermarketsPage() {
-  const { supermarkets, addSupermarket, editSupermarket, deleteSupermarket } = useShopping();
+  const {
+    supermarkets,
+    sectionsBySupermarket,
+    addSupermarket,
+    editSupermarket,
+    deleteSupermarket,
+    addSectionToSupermarket,
+    renameSectionInSupermarket,
+    moveSectionInSupermarket,
+    deleteSectionFromSupermarket
+  } = useShopping();
 
   return (
     <div className="space-y-4">
@@ -14,15 +24,20 @@ export default function SupermarketsPage() {
         </p>
         <h2 className="mt-1 text-2xl font-bold">Manage Supermarkets</h2>
         <p className="mt-2 text-sm text-amber-50">
-          Add, edit, or delete stores used by products and templates.
+          Add stores and configure the order of sections for each shopping route.
         </p>
       </section>
 
       <SupermarketManager
         supermarkets={supermarkets}
+        sectionsBySupermarket={sectionsBySupermarket}
         onAddSupermarket={addSupermarket}
         onEditSupermarket={editSupermarket}
         onDeleteSupermarket={deleteSupermarket}
+        onAddSection={addSectionToSupermarket}
+        onRenameSection={renameSectionInSupermarket}
+        onMoveSection={moveSectionInSupermarket}
+        onDeleteSection={deleteSectionFromSupermarket}
       />
     </div>
   );

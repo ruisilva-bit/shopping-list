@@ -9,6 +9,7 @@ export default function AddProductModal() {
     isAddModalOpen,
     closeAddModal,
     supermarkets,
+    sectionsBySupermarket,
     templates,
     addProduct
   } = useShopping();
@@ -60,6 +61,7 @@ export default function AddProductModal() {
 
         <ProductForm
           supermarkets={supermarkets}
+          sectionsBySupermarket={sectionsBySupermarket}
           templates={templates}
           onAddProduct={addProduct}
           onSubmitSuccess={closeAddModal}

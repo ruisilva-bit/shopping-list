@@ -8,6 +8,7 @@ export default function ProductsPage() {
   const {
     filteredProducts,
     supermarkets,
+    sectionsBySupermarket,
     selectedSupermarket,
     setSelectedSupermarket,
     deleteProduct,
@@ -26,6 +27,8 @@ export default function ProductsPage() {
       <ProductList
         products={filteredProducts}
         supermarkets={supermarkets}
+        sectionsBySupermarket={sectionsBySupermarket}
+        selectedSupermarket={selectedSupermarket}
         onDeleteProduct={deleteProduct}
         onEditProduct={editProduct}
         onToggleBought={toggleProductBought}
