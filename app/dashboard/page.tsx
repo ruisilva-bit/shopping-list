@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useShopping } from "../../context/ShoppingContext";
 import { Product, ProductTemplate } from "../../types";
 
 const TOP_PRODUCTS_LIMIT = 8;
+const RECENT_PURCHASES_PREVIEW_LIMIT = 8;
 const RESTOCK_LIMIT = 8;
 
 type ProductHistoryInsight = {
@@ -141,6 +142,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 
 export default function DashboardPage() {
   const { templates, products, supermarkets } = useShopping();
+  const [showAllRecentPurchases, setShowAllRecentPurchases] = useState(false);
 
   const productHistory = useMemo(() => buildProductHistory(templates), [templates]);
   const recentPurchases = useMemo(() => buildRecentPurchases(templates), [templates]);
@@ -151,6 +153,13 @@ export default function DashboardPage() {
   const boughtProducts = products.filter((product) => product.isBought);
   const totalPurchaseHistory = productHistory.reduce((sum, item) => sum + item.purchaseCount, 0);
   const topProducts = productHistory.slice(0, TOP_PRODUCTS_LIMIT);
+  const visibleRecentPurchases = showAllRecentPurchases
+    ? recentPurchases
+    : recentPurchases.slice(0, RECENT_PURCHASES_PREVIEW_LIMIT);
+  const hiddenRecentPurchasesCount = Math.max(
+    recentPurchases.length - RECENT_PURCHASES_PREVIEW_LIMIT,
+    0
+  );
   const topStores = storeInsights.slice(0, 6);
 
   return (
@@ -220,15 +229,29 @@ export default function DashboardPage() {
                 Sem registos
               </p>
             ) : (
-              recentPurchases.map((entry) => (
-                <article
-                  key={`${entry.templateId}-${entry.boughtAt}`}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
-                >
-                  <p className="text-sm font-semibold text-slate-900">{entry.productName}</p>
-                  <p className="mt-1 text-xs text-slate-500">{formatDateTime(entry.boughtAt)}</p>
-                </article>
-              ))
+              <>
+                {visibleRecentPurchases.map((entry) => (
+                  <article
+                    key={`${entry.templateId}-${entry.boughtAt}`}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
+                  >
+                    <p className="text-sm font-semibold text-slate-900">{entry.productName}</p>
+                    <p className="mt-1 text-xs text-slate-500">{formatDateTime(entry.boughtAt)}</p>
+                  </article>
+                ))}
+
+                {hiddenRecentPurchasesCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllRecentPurchases((current) => !current)}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    {showAllRecentPurchases
+                      ? "Mostrar menos"
+                      : `Mostrar mais ${hiddenRecentPurchasesCount}`}
+                  </button>
+                ) : null}
+              </>
             )}
           </div>
         </article>
