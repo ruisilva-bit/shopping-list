@@ -18,13 +18,13 @@ export default function SupermarketsPage() {
 
   return (
     <div className="space-y-4">
-      <section className="rounded-2xl bg-gradient-to-r from-orange-600 to-amber-500 p-5 text-white shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-amber-100">
-          Supermarket Setup
+      <section className="rounded-3xl border border-orange-200 bg-gradient-to-br from-orange-600 to-amber-500 p-4 text-white shadow-sm sm:p-5">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-100">
+          Supermercados
         </p>
-        <h2 className="mt-1 text-2xl font-bold">Manage Supermarkets</h2>
+        <h2 className="mt-1 text-2xl font-bold">Gerir lojas e secções</h2>
         <p className="mt-2 text-sm text-amber-50">
-          Add stores and configure the order of sections for each shopping route.
+          Toca numa loja para abrir as secções, alterar a ordem do percurso e evitar scroll excessivo no telemóvel.
         </p>
       </section>
 
