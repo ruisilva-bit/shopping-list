@@ -13,10 +13,7 @@ export default function ProductDatabasePage() {
         <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-100">
           Base de dados
         </p>
-        <h2 className="mt-1 text-2xl font-bold">Produtos e histórico</h2>
-        <p className="mt-2 text-sm text-cyan-50">
-          Edita nome, supermercados e secção por supermercado de cada produto guardado.
-        </p>
+        <h2 className="mt-1 text-2xl font-bold">Produtos</h2>
       </section>
 
       <ProductDatabaseManager

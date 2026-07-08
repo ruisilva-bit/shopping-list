@@ -46,10 +46,7 @@ export default function AddProductModal() {
 
       <section className="relative z-10 w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-4 shadow-xl sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-2">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Add Product</h2>
-            <p className="text-sm text-slate-600">Quick add from menu.</p>
-          </div>
+          <h2 className="text-lg font-semibold text-slate-900">Add Product</h2>
           <button
             type="button"
             onClick={closeAddModal}

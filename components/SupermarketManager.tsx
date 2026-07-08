@@ -146,9 +146,6 @@ export default function SupermarketManager({
     <div className="space-y-4">
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">Adicionar supermercado</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Cria novas lojas e depois define a ordem das secções dentro de cada uma.
-        </p>
 
         <form onSubmit={handleAddSubmit} className="mt-4 flex flex-col gap-2 sm:flex-row">
           <input
@@ -171,9 +168,6 @@ export default function SupermarketManager({
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="text-base font-semibold text-slate-900">Supermercados</h3>
-        <p className="mt-1 text-sm text-slate-600">
-          Toca num supermercado para abrir ou fechar as secções e evitar scroll gigante em mobile.
-        </p>
 
         <div className="mt-3 space-y-3">
           {supermarkets.map((supermarket) => {
@@ -220,9 +214,6 @@ export default function SupermarketManager({
                         className="min-w-0 grow text-left"
                       >
                         <p className="font-medium text-slate-800">{supermarket}</p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {sections.length} secção(ões) · {isExpanded ? "aberto" : "fechado"}
-                        </p>
                       </button>
                       <div className="flex gap-2">
                         <button
@@ -248,8 +239,7 @@ export default function SupermarketManager({
                     {isExpanded ? (
                       <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-slate-800">Ordem das secções</p>
-                          <span className="text-xs text-slate-500">Setas para reordenar</span>
+                          <p className="text-sm font-semibold text-slate-800">Secções</p>
                         </div>
 
                         <div className="mt-2 space-y-2">

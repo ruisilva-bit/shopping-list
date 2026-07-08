@@ -49,9 +49,6 @@ export default function AppShell({ children }: AppShellProps) {
                 SL
               </div>
               <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                  Shopping Planner
-                </p>
                 <h1 className="truncate text-lg font-bold leading-tight text-slate-900 sm:text-xl">
                   Shopping List
                 </h1>

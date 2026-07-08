@@ -202,10 +202,7 @@ export default function ProductForm({
 
       {selectedSupermarkets.length > 0 ? (
         <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium text-slate-700">Sections by market</p>
-            <span className="text-xs text-slate-500">Optional now, learn later when buying</span>
-          </div>
+          <p className="text-sm font-medium text-slate-700">Sections by market</p>
 
           <div className="space-y-2">
             {selectedSupermarkets.map((supermarket) => {
