@@ -5,7 +5,6 @@ import { useShopping } from "../../context/ShoppingContext";
 import { Product, ProductTemplate } from "../../types";
 
 const TOP_PRODUCTS_LIMIT = 8;
-const RECENT_LIMIT = 8;
 const RESTOCK_LIMIT = 8;
 
 type ProductHistoryInsight = {
@@ -84,9 +83,7 @@ function buildRecentPurchases(templates: ProductTemplate[]) {
     });
   });
 
-  return logs
-    .sort((a, b) => Date.parse(b.boughtAt) - Date.parse(a.boughtAt))
-    .slice(0, RECENT_LIMIT);
+  return logs.sort((a, b) => Date.parse(b.boughtAt) - Date.parse(a.boughtAt));
 }
 
 function buildStoreInsights(products: Product[]) {

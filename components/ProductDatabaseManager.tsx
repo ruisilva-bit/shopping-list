@@ -17,7 +17,6 @@ type ProductDatabaseManagerProps = {
 };
 
 const LOGS_PREVIEW_COUNT = 3;
-const LOGS_PAGE_SIZE = 8;
 
 function formatDateTime(isoDate: string) {
   try {
@@ -58,7 +57,6 @@ export default function ProductDatabaseManager({
 }: ProductDatabaseManagerProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedTemplateId, setExpandedTemplateId] = useState<string | null>(null);
-  const [pageByTemplate, setPageByTemplate] = useState<Record<string, number>>({});
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editSupermarkets, setEditSupermarkets] = useState<string[]>([]);
@@ -79,15 +77,6 @@ export default function ProductDatabaseManager({
     () => templates.reduce((sum, template) => sum + template.purchaseLog.length, 0),
     [templates]
   );
-
-  const getCurrentPage = (templateId: string) => pageByTemplate[templateId] ?? 1;
-
-  const setCurrentPage = (templateId: string, page: number) => {
-    setPageByTemplate((current) => ({
-      ...current,
-      [templateId]: page
-    }));
-  };
 
   const startEdit = (template: ProductTemplate) => {
     setEditingTemplateId(template.id);
@@ -171,10 +160,6 @@ export default function ProductDatabaseManager({
             const isExpanded = expandedTemplateId === template.id;
             const isEditing = editingTemplateId === template.id;
             const sortedLogs = [...template.purchaseLog].reverse();
-            const totalPages = Math.max(1, Math.ceil(sortedLogs.length / LOGS_PAGE_SIZE));
-            const currentPage = Math.min(getCurrentPage(template.id), totalPages);
-            const pageStart = (currentPage - 1) * LOGS_PAGE_SIZE;
-            const pageLogs = sortedLogs.slice(pageStart, pageStart + LOGS_PAGE_SIZE);
 
             return (
               <article
@@ -345,36 +330,12 @@ export default function ProductDatabaseManager({
                           {isExpanded ? (
                             <div>
                               <ul className="mt-2 space-y-1 text-xs text-slate-700">
-                                {pageLogs.map((entry, index) => (
+                                {sortedLogs.map((entry, index) => (
                                   <li key={`${template.id}-${entry}-${index}`}>
-                                    {pageStart + index + 1}. {formatDateTime(entry)}
+                                    {index + 1}. {formatDateTime(entry)}
                                   </li>
                                 ))}
                               </ul>
-
-                              {totalPages > 1 ? (
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                  {Array.from({ length: totalPages }, (_, index) => index + 1).map(
-                                    (page) => (
-                                      <button
-                                        key={`${template.id}-page-${page}`}
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          setCurrentPage(template.id, page);
-                                        }}
-                                        className={
-                                          page === currentPage
-                                            ? "rounded-lg bg-slate-900 px-2 py-1 text-xs font-semibold text-white"
-                                            : "rounded-lg bg-white px-2 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-300"
-                                        }
-                                      >
-                                        {page}
-                                      </button>
-                                    )
-                                  )}
-                                </div>
-                              ) : null}
                             </div>
                           ) : (
                             <ul className="mt-2 space-y-1 text-xs text-slate-700">
